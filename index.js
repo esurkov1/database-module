@@ -1,42 +1,72 @@
-const express = require('express');
-const cookieParser = require('cookie-parser');
+const mysql = require('mysql2/promise');
 
-const errorHandler = (error, req, res) => res.status(500).json({ error: error.message });
-const notFoundHandler = (req, res) => res.status(404).json({ error: "Module not found", path: req.path });
+class Database {
+    constructor(config) {
+        this.config = {
+            ...config,
+            connectTimeout: 10000
+        };
+        this.pool = mysql.createPool(this.config);
+    }
 
-// Функция для поднятия сервера с динамическим роутером
-function server({ port, prefix = '/api', middleware = [], routes }) {
-
-    const app = express();
-
-    app.use(express.json()); // Middleware для парсинга JSON тел запросов
-    app.use(cookieParser()); // Middleware для парсинга cookies
-
-    function parseRoutes(obj, path = '') {
-        for (const key in obj) {
-
-            const method = (obj[key].method && ['get', 'post', 'put', 'delete'].includes(obj[key].method.toLowerCase())) ? obj[key].method.toLowerCase() : 'post';
-
-            let newPath = path ? `${path}/${key}` : key;
-
-            if (obj[key].handler) {
-                newPath = prefix + '/' + newPath;
-                app[method](newPath, ...middleware, obj[key].handler);
-
-            } else if (typeof obj[key] === 'object') {
-                parseRoutes(obj[key], newPath);
-            }
+    // Выполнение запроса
+    async query(sql, params = []) {
+        const start = Date.now();
+        try {
+            const [results] = await this.pool.execute(sql, params);
+            console.info(`[DB] Query executed in ${Date.now() - start}ms`, { sql, params });
+            return results;
+        } catch (error) {
+            console.error(`[DB] Query failed`, { sql, params, error: error.message });
+            throw error;
         }
     }
 
-    parseRoutes(routes);
+    // Закрытие пула соединений
+    async close() {
+        try {
+            await this.pool.end();
+            console.info('[DB] Connection pool closed successfully');
+        } catch (error) {
+            console.error(`[DB] Failed to close connection pool`, { error: error.message });
+            throw error;
+        }
+    }
 
-    app.use(notFoundHandler);
-    app.use(errorHandler);
+    // Получение соединения
+    async getConnection() {
+        try {
 
-    app.listen(port, () => console.log(`${prefix} is running on port ${port}`));
+            // noinspection JSVoidFunctionReturnValueUsed
+            const connection = await this.pool.getConnection();
+            console.debug('[DB] Connection obtained');
+            return connection;
+        } catch (error) {
+            console.error(`[DB] Failed to obtain connection`, { error: error.message });
+            throw error.message;
+        }
+    }
 
-    return app;
+    // Выполнение транзакции
+    async transaction(callback) {
+        const connection = await this.getConnection();
+
+        try {
+            await connection.beginTransaction();
+            console.debug('[DB] Transaction started');
+            const result = await callback(connection);
+            await connection.commit();
+            console.info('[DB] Transaction committed successfully');
+            return result;
+        } catch (error) {
+            await connection.rollback();
+            console.error(`[DB] Transaction failed`, { error: error.message });
+            throw error;
+        } finally {
+            connection.release();
+            console.debug('[DB] Connection released');
+        }
+    }
 }
 
-module.exports = server;
+module.exports = Database;
