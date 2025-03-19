@@ -13,9 +13,9 @@ class Database {
     async query(sql, params = []) {
         const start = Date.now();
         try {
-            const [results] = await this.pool.execute(sql, params);
+            const result = await this.pool.execute(sql, params);
             console.info(`[DB] Query executed in ${Date.now() - start}ms`, { sql, params });
-            return results;
+            return result;
         } catch (error) {
             console.error(`[DB] Query failed`, { sql, params, error: error.message });
             throw error;
